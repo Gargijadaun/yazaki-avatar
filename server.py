@@ -173,15 +173,17 @@ def health():
     return jsonify({'ok': True, 'model': WAV2LIP_MODEL is not None,
                     'face': stored_face['path']})
 
-@app.route('/<path:filename>')
-def static_files(filename):
-    blocked = {'.py', '.env', '.yaml', '.yml', '.sh'}
-    if os.path.splitext(filename)[1].lower() in blocked or '..' in filename:
-        return '', 404
-    try:
-        return send_from_directory(BASE_DIR, filename)
-    except Exception:
-        return '', 404
+@app.route('/new.mp4')
+def serve_video():
+    return send_from_directory(BASE_DIR, 'new.mp4')
+
+@app.route('/avatar.png')
+def serve_avatar():
+    return send_from_directory(BASE_DIR, 'avatar.png')
+
+@app.route('/uploads/<path:filename>')
+def serve_uploads(filename):
+    return send_from_directory(AVATAR_DIR, filename)
 
 # ── Media helpers ──────────────────────────────────────────────────────────────
 def save_face_media(avatar_b64, out_dir, name):
