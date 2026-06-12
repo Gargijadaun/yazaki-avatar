@@ -29,4 +29,5 @@ RUN mkdir -p uploads Wav2Lip/temp Wav2Lip/checkpoints
 
 EXPOSE 5001
 
-CMD ["python", "server.py"]
+# 1 worker (model loaded once), 4 threads (concurrent requests), 300s timeout (inference can be slow)
+CMD ["sh", "-c", "gunicorn --workers 1 --threads 4 --timeout 300 --bind 0.0.0.0:${PORT:-5001} server:app"]

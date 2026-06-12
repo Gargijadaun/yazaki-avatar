@@ -201,21 +201,6 @@ def save_face_media(avatar_b64, out_dir, name):
     return path, False
 
 
-def predetect_face_box(face_path, is_video):
-    try:
-        import json as _j
-        r = subprocess.run(
-            [sys.executable, 'detect_face.py', face_path, str(is_video)],
-            cwd=WAV2LIP_DIR, capture_output=True, text=True, timeout=120)
-        if r.returncode == 0:
-            box = _j.loads(r.stdout).get('box')
-            if box:
-                print(f'[upload] cached box: {box}')
-                return box
-    except Exception as e:
-        print(f'[upload] face detect error: {e}')
-    return None
-
 # ── In-process inference ───────────────────────────────────────────────────────
 def _run_batch(img_list, mel_list, frame_list, coord_list):
     IMG_SIZE = 96
@@ -378,9 +363,8 @@ def upload_avatar():
         avatar_b64 = data.get('avatar', '').strip()
         if not avatar_b64: return jsonify({'error': 'No avatar data'}), 400
         face_path, is_video = save_face_media(avatar_b64, AVATAR_DIR, 'current')
-        box = predetect_face_box(face_path, is_video)
-        stored_face = {'path': face_path, 'is_video': is_video, 'box': box}
-        return jsonify({'ok': True, 'is_video': is_video, 'box': box})
+        stored_face = {'path': face_path, 'is_video': is_video, 'box': None}
+        return jsonify({'ok': True, 'is_video': is_video})
     except Exception as e:
         print(traceback.format_exc())
         return jsonify({'error': str(e)}), 500
