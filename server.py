@@ -6,7 +6,7 @@ import cv2
 
 # ── MongoDB (optional — server runs fine without it) ──────────────────────────
 try:
-    from pymongo import MongoClient, ASCENDING, DESCENDING
+    from pymongo import MongoClient
     _MONGO_URI  = os.environ.get('MONGODB_URI', '')
     _MONGO_DB   = os.environ.get('MONGODB_DB', 'yazaki_avatar')
     if _MONGO_URI:
@@ -20,7 +20,7 @@ try:
         _chats.insert_one({'_startup_test': True}).inserted_id
         _chats.delete_one({'_startup_test': True})
         try:
-            _chats.create_index([('session_id', ASCENDING), ('timestamp', DESCENDING)])
+            _chats.create_index([('session_id', 1), ('timestamp', -1)])
         except Exception:
             pass  # index creation is optional
         print('[startup] MongoDB write access confirmed')
@@ -117,6 +117,11 @@ def cors(r):
 @app.after_request
 def after(r): return cors(r)
 
+@app.errorhandler(Exception)
+def handle_exception(e):
+    print(traceback.format_exc())
+    return jsonify({'error': str(e), 'type': type(e).__name__}), 500
+
 # ── Routes ─────────────────────────────────────────────────────────────────────
 @app.route('/')
 def index():
@@ -154,7 +159,7 @@ def chat_history():
         session_id = request.args.get('session_id', '').strip()
         limit      = min(int(request.args.get('limit', 50)), 200)
         query      = {'session_id': session_id} if session_id else {}
-        docs = list(_chats.find(query, {'_id': 0}).sort('timestamp', ASCENDING).limit(limit))
+        docs = list(_chats.find(query, {'_id': 0}).sort('timestamp', 1).limit(limit))
         for d in docs:
             if isinstance(d.get('timestamp'), datetime):
                 d['timestamp'] = d['timestamp'].isoformat()
