@@ -122,29 +122,37 @@ def save_chat():
     if request.method == 'OPTIONS': return make_response('OK', 200)
     if not _chats:
         return jsonify({'ok': False, 'error': 'MongoDB not configured'}), 503
-    data = request.get_json(force=True, silent=True) or {}
-    doc = {
-        'session_id': str(data.get('session_id', ''))[:64],
-        'timestamp':  datetime.now(timezone.utc),
-        'user':       str(data.get('user', ''))[:2000],
-        'ai':         str(data.get('ai',   ''))[:2000],
-        'lang':       str(data.get('lang', 'en-US'))[:16],
-    }
-    result = _chats.insert_one(doc)
-    return jsonify({'ok': True, 'id': str(result.inserted_id)})
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        doc = {
+            'session_id': str(data.get('session_id', ''))[:64],
+            'timestamp':  datetime.now(timezone.utc),
+            'user':       str(data.get('user', ''))[:2000],
+            'ai':         str(data.get('ai',   ''))[:2000],
+            'lang':       str(data.get('lang', 'en-US'))[:16],
+        }
+        result = _chats.insert_one(doc)
+        return jsonify({'ok': True, 'id': str(result.inserted_id)})
+    except Exception as e:
+        print(f'[save-chat] error: {e}')
+        return jsonify({'ok': False, 'error': str(e)}), 500
 
 @app.route('/chat-history', methods=['GET'])
 def chat_history():
     if not _chats:
         return jsonify({'ok': False, 'chats': []})
-    session_id = request.args.get('session_id', '').strip()
-    limit      = min(int(request.args.get('limit', 50)), 200)
-    query      = {'session_id': session_id} if session_id else {}
-    docs = list(_chats.find(query, {'_id': 0}).sort('timestamp', ASCENDING).limit(limit))
-    for d in docs:
-        if isinstance(d.get('timestamp'), datetime):
-            d['timestamp'] = d['timestamp'].isoformat()
-    return jsonify({'ok': True, 'chats': docs})
+    try:
+        session_id = request.args.get('session_id', '').strip()
+        limit      = min(int(request.args.get('limit', 50)), 200)
+        query      = {'session_id': session_id} if session_id else {}
+        docs = list(_chats.find(query, {'_id': 0}).sort('timestamp', ASCENDING).limit(limit))
+        for d in docs:
+            if isinstance(d.get('timestamp'), datetime):
+                d['timestamp'] = d['timestamp'].isoformat()
+        return jsonify({'ok': True, 'chats': docs})
+    except Exception as e:
+        print(f'[chat-history] error: {e}')
+        return jsonify({'ok': False, 'chats': [], 'error': str(e)})
 
 @app.route('/health')
 def health():
