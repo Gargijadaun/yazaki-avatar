@@ -531,7 +531,7 @@ function loadDefaultAvatar(){
       if(!r.ok) throw new Error();
       avatarIsVideo=true;
       avatarVideo.src='new.mp4';
-      avatarVideo.style.display='';
+      avatarVideo.style.display='block';
       avatarImg.style.display='none';
       avatarVideo.muted=true; avatarVideo.loop=true;
       avatarVideo.play().catch(()=>{});
