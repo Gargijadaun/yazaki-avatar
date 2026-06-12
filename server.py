@@ -7,14 +7,23 @@ import cv2
 # ── MongoDB (optional — server runs fine without it) ──────────────────────────
 try:
     from pymongo import MongoClient, ASCENDING, DESCENDING
-    _MONGO_URI = os.environ.get('MONGODB_URI', '')
+    _MONGO_URI  = os.environ.get('MONGODB_URI', '')
+    _MONGO_DB   = os.environ.get('MONGODB_DB', 'yazaki_avatar')
     if _MONGO_URI:
-        _mc = MongoClient(_MONGO_URI, serverSelectionTimeoutMS=5000)
+        _mc = MongoClient(_MONGO_URI, serverSelectionTimeoutMS=8000,
+                          connectTimeoutMS=8000, socketTimeoutMS=10000)
         _mc.admin.command('ping')
-        _mdb   = _mc['yazaki_avatar']
+        print(f'[startup] MongoDB ping OK, using db={_MONGO_DB}')
+        _mdb   = _mc[_MONGO_DB]
         _chats = _mdb['chats']
-        _chats.create_index([('session_id', ASCENDING), ('timestamp', DESCENDING)])
-        print('[startup] MongoDB connected')
+        # Test write access before accepting traffic
+        _chats.insert_one({'_startup_test': True}).inserted_id
+        _chats.delete_one({'_startup_test': True})
+        try:
+            _chats.create_index([('session_id', ASCENDING), ('timestamp', DESCENDING)])
+        except Exception:
+            pass  # index creation is optional
+        print('[startup] MongoDB write access confirmed')
     else:
         _chats = None
         print('[startup] MONGODB_URI not set — chat saving disabled')
