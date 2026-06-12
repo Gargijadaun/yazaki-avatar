@@ -1,5 +1,5 @@
 from flask import Flask, request, jsonify, make_response, send_from_directory
-import subprocess, base64, tempfile, os, uuid, sys, threading, traceback, shutil
+import subprocess, base64, tempfile, os, uuid, sys, threading, traceback, shutil, gc
 from datetime import datetime, timezone
 import numpy as np
 import cv2
@@ -193,8 +193,8 @@ def save_face_media(avatar_b64, out_dir, name):
 
     if img.mode != 'RGB': img = img.convert('RGB')
     w, h = img.size
-    if max(w, h) > 720:
-        s = 720 / max(w, h)
+    if max(w, h) > 480:
+        s = 480 / max(w, h)
         img = img.resize((int(w*s), int(h*s)), Image.LANCZOS)
     path = os.path.join(out_dir, f'{name}.png')
     img.save(path, 'PNG')
@@ -235,68 +235,84 @@ def _run_batch(img_list, mel_list, frame_list, coord_list):
     return out
 
 
-def wav2lip_infer(face_path, wav_path, box, is_video):
-    IMG_SIZE = 96; BATCH = 20; MEL_STEP = 16
-    TARGET_FPS = 10.0
+def _shrink(frame, max_dim=480):
+    h, w = frame.shape[:2]
+    if max(h, w) <= max_dim:
+        return frame
+    s = max_dim / max(h, w)
+    return cv2.resize(frame, (int(w*s), int(h*s)), interpolation=cv2.INTER_AREA)
+
+
+def wav2lip_infer(face_path, wav_path, box, is_video, out_avi_path):
+    """Run inference, write frames directly to out_avi_path (no frame list in RAM)."""
+    IMG_SIZE = 96; BATCH = 8; MEL_STEP = 16
+    TARGET_FPS = 10.0; MAX_FRAMES = 100  # cap at 10 s to stay within 2 GB RAM
 
     if is_video:
         cap = cv2.VideoCapture(face_path)
         orig_fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
         step = max(1, round(orig_fps / TARGET_FPS))
         frames, idx = [], 0
-        while True:
+        while len(frames) < MAX_FRAMES:
             ret, frm = cap.read()
             if not ret: break
-            if idx % step == 0: frames.append(frm)
+            if idx % step == 0:
+                frames.append(_shrink(frm))
             idx += 1
         cap.release()
     else:
-        frames = [cv2.imread(face_path)]
+        frm = cv2.imread(face_path)
+        frames = [_shrink(frm)]
 
     if not frames: raise ValueError('No frames from face source')
-    fps = TARGET_FPS
 
     wav = wav2lip_audio.load_wav(wav_path, 16000)
     mel = wav2lip_audio.melspectrogram(wav)
     if np.isnan(mel).any(): raise ValueError('Mel has NaN')
 
-    mel_mult = 80.0 / fps
+    mel_mult = 80.0 / TARGET_FPS
     mel_chunks, i = [], 0
-    while True:
+    while len(mel_chunks) < MAX_FRAMES:
         s = int(i * mel_mult)
         if s + MEL_STEP > mel.shape[1]:
             mel_chunks.append(mel[:, mel.shape[1]-MEL_STEP:]); break
         mel_chunks.append(mel[:, s:s+MEL_STEP]); i += 1
 
-    frames = frames[:len(mel_chunks)]
+    n = min(len(frames), len(mel_chunks))
+    mel_chunks = mel_chunks[:n]
     is_static = len(frames) == 1
 
     if box and len(box) == 4:
-        y1, y2, x1, x2 = box
+        y1, y2, x1, x2 = [int(v) for v in box]
         face_regions = [(frm[y1:y2, x1:x2].copy(), (y1,y2,x1,x2)) for frm in frames]
     else:
         import face_detection as fd_mod
         det = fd_mod.FaceAlignment(fd_mod.LandmarksType._2D, flip_input=False, device='cpu')
         rgb = cv2.cvtColor(frames[0], cv2.COLOR_BGR2RGB)
         preds = det.get_detections_for_batch(np.array([rgb]))
-        del det
+        del det; gc.collect()
         if not preds or preds[0] is None: raise ValueError('No face detected')
         rx1, ry1, rx2, ry2 = [int(v) for v in preds[0]]
         ry2 = min(frames[0].shape[0], ry2+10)
         face_regions = [(frm[ry1:ry2, rx1:rx2].copy(), (ry1,ry2,rx1,rx2)) for frm in frames]
 
-    out_frames = []
+    fh, fw = frames[0].shape[:2]
+    vw = cv2.VideoWriter(out_avi_path, cv2.VideoWriter_fourcc(*'DIVX'), TARGET_FPS, (fw, fh))
+
     ib, mb, fb, cb = [], [], [], []
     for i, m_chunk in enumerate(mel_chunks):
-        idx = 0 if is_static else i % len(frames)
-        face, coords = face_regions[idx]
+        fi = 0 if is_static else i % len(frames)
+        face, coords = face_regions[fi]
         ib.append(cv2.resize(face, (IMG_SIZE, IMG_SIZE), interpolation=cv2.INTER_AREA))
-        mb.append(m_chunk); fb.append(frames[idx].copy()); cb.append(coords)
+        mb.append(m_chunk); fb.append(frames[fi].copy()); cb.append(coords)
         if len(ib) >= BATCH:
-            out_frames.extend(_run_batch(ib, mb, fb, cb))
+            for frm in _run_batch(ib, mb, fb, cb): vw.write(frm)
             ib, mb, fb, cb = [], [], [], []
-    if ib: out_frames.extend(_run_batch(ib, mb, fb, cb))
-    return out_frames, fps
+    if ib:
+        for frm in _run_batch(ib, mb, fb, cb): vw.write(frm)
+
+    vw.release()
+    return TARGET_FPS
 
 # ── Background lip-sync job ────────────────────────────────────────────────────
 def run_lipsync_job(job_id, text, face_path, is_video, box, lang, rate_val):
@@ -323,14 +339,13 @@ def run_lipsync_job(job_id, text, face_path, is_video, box, lang, rate_val):
         if not os.path.exists(wav_path):
             raise RuntimeError('WAV conversion failed')
 
-        with infer_lock:
-            out_frames, fps = wav2lip_infer(face_path, wav_path, box, is_video)
+        # Trim text so TTS stays under ~10 s (prevent OOM from very long responses)
+        text = text[:300]
 
-        fh, fw = out_frames[0].shape[:2]
         avi_path = os.path.join(tmp, f'{job_id}.avi')
-        vw = cv2.VideoWriter(avi_path, cv2.VideoWriter_fourcc(*'DIVX'), fps, (fw, fh))
-        for frm in out_frames: vw.write(frm)
-        vw.release()
+        with infer_lock:
+            wav2lip_infer(face_path, wav_path, box, is_video, avi_path)
+        gc.collect()
 
         out_path = os.path.join(tmp, f'{job_id}_out.mp4')
         subprocess.run(
