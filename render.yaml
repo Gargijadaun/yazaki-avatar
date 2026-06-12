@@ -6,10 +6,10 @@ services:
     dockerfilePath: Dockerfile
     healthCheckPath: /health
     envVars:
-      - key: PORT
-        value: 5001
       - key: GROQ_API_KEY
         sync: false          # set this manually in Render dashboard — never commit the value
+      - key: PORT
+        value: "5001"
     disk:
       name: avatar-uploads
       mountPath: /app/uploads

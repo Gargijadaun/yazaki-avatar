@@ -1,5 +1,5 @@
 from flask import Flask, request, jsonify, make_response, send_from_directory
-import subprocess, base64, tempfile, os, uuid, sys, threading, traceback
+import subprocess, base64, tempfile, os, uuid, sys, threading, traceback, shutil
 import numpy as np
 import cv2
 
@@ -11,15 +11,21 @@ TEMP_DIR    = os.path.join(WAV2LIP_DIR, 'temp')
 os.makedirs(AVATAR_DIR, exist_ok=True)
 os.makedirs(TEMP_DIR,   exist_ok=True)
 
-# Add Wav2Lip to path so we can import its modules directly
+# ── Wav2Lip imports (wrapped so server starts even if torch is missing) ────────
 sys.path.insert(0, WAV2LIP_DIR)
-import torch
-from models import Wav2Lip as Wav2LipModel
-import audio as wav2lip_audio
+try:
+    import torch
+    from models import Wav2Lip as Wav2LipModel
+    import audio as wav2lip_audio
+    _IMPORTS_OK = True
+except Exception as _ie:
+    print(f'[startup] Wav2Lip import error: {_ie}')
+    _IMPORTS_OK = False
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024
 
+# ── Default avatar: use new.mp4 if no upload exists yet ───────────────────────
 stored_face = {'path': None, 'is_video': False, 'box': None}
 for _ext, _vid in [('mp4', True), ('png', False)]:
     _p = os.path.join(AVATAR_DIR, f'current.{_ext}')
@@ -28,9 +34,20 @@ for _ext, _vid in [('mp4', True), ('png', False)]:
         print(f'[startup] restored face: {_p}')
         break
 
+if not stored_face['path']:
+    for _default in ['new.mp4', 'avatar.png']:
+        _src = os.path.join(BASE_DIR, _default)
+        if os.path.exists(_src):
+            _is_vid = _default.endswith('.mp4')
+            _dst = os.path.join(AVATAR_DIR, 'current.' + ('mp4' if _is_vid else 'png'))
+            shutil.copy2(_src, _dst)
+            stored_face = {'path': _dst, 'is_video': _is_vid, 'box': None}
+            print(f'[startup] default face set from {_default}')
+            break
+
 jobs       = {}
 jobs_lock  = threading.Lock()
-infer_lock = threading.Lock()   # serialise CPU inference
+infer_lock = threading.Lock()
 
 VOICE_MAP = {
     'en-US': 'en-US-JennyNeural', 'en-GB': 'en-GB-SoniaNeural',
@@ -39,8 +56,7 @@ VOICE_MAP = {
     'ja-JP': 'ja-JP-NanamiNeural',
 }
 
-# ── Load model ONCE at startup — eliminates the 20-30 s per-request overhead ─
-
+# ── Load model ONCE at startup ─────────────────────────────────────────────────
 def _load_checkpoint():
     print('[startup] Loading Wav2Lip model...')
     loc = torch.device('cpu')
@@ -56,14 +72,14 @@ def _load_checkpoint():
         print('[startup] State-dict checkpoint loaded.')
         return m.cpu().eval()
 
-try:
-    WAV2LIP_MODEL = _load_checkpoint()
-except Exception as _e:
-    print(f'[startup] WARNING — model not loaded: {_e}')
-    WAV2LIP_MODEL = None
+WAV2LIP_MODEL = None
+if _IMPORTS_OK:
+    try:
+        WAV2LIP_MODEL = _load_checkpoint()
+    except Exception as _e:
+        print(f'[startup] Model load failed: {_e}')
 
-# ── CORS ──────────────────────────────────────────────────────────────────────
-
+# ── CORS ───────────────────────────────────────────────────────────────────────
 def cors(r):
     r.headers['Access-Control-Allow-Origin']  = '*'
     r.headers['Access-Control-Allow-Methods'] = 'POST, GET, OPTIONS'
@@ -73,33 +89,31 @@ def cors(r):
 @app.after_request
 def after(r): return cors(r)
 
+# ── Routes ─────────────────────────────────────────────────────────────────────
 @app.route('/')
 def index():
     return send_from_directory(BASE_DIR, 'index.html')
 
-@app.route('/config', methods=['GET'])
+@app.route('/config')
 def config():
-    # Groq key lives in Render env var — never in code or HTML
     return jsonify({'groq_key': os.environ.get('GROQ_API_KEY', '')})
 
-@app.route('/health', methods=['GET'])
+@app.route('/health')
 def health():
-    return (f'OK | model:{WAV2LIP_MODEL is not None} '
-            f'| ckpt:{os.path.exists(CHECKPOINT)} '
-            f'| face:{stored_face["path"]}')
+    return jsonify({'ok': True, 'model': WAV2LIP_MODEL is not None,
+                    'face': stored_face['path']})
 
-@app.route('/test', methods=['GET'])
-def test_route():
-    return jsonify({
-        'model_loaded': WAV2LIP_MODEL is not None,
-        'checkpoint':   os.path.exists(CHECKPOINT),
-        'stored_face':  stored_face,
-        'torch':        torch.__version__,
-        'cv2':          cv2.__version__,
-    })
+@app.route('/<path:filename>')
+def static_files(filename):
+    blocked = {'.py', '.env', '.yaml', '.yml', '.sh'}
+    if os.path.splitext(filename)[1].lower() in blocked or '..' in filename:
+        return '', 404
+    try:
+        return send_from_directory(BASE_DIR, filename)
+    except Exception:
+        return '', 404
 
-# ── Media helpers ─────────────────────────────────────────────────────────────
-
+# ── Media helpers ──────────────────────────────────────────────────────────────
 def save_face_media(avatar_b64, out_dir, name):
     from PIL import Image
     import io as _io
@@ -120,7 +134,7 @@ def save_face_media(avatar_b64, out_dir, name):
             try: os.remove(orig_path)
             except: pass
             if r.returncode != 0 or not os.path.exists(mp4_path):
-                raise RuntimeError(f'ffmpeg video convert failed: {r.stderr[-300:]}')
+                raise RuntimeError(f'ffmpeg convert failed: {r.stderr[-300:]}')
             return mp4_path, True
 
         img = Image.open(_io.BytesIO(data))
@@ -150,13 +164,11 @@ def predetect_face_box(face_path, is_video):
             if box:
                 print(f'[upload] cached box: {box}')
                 return box
-        print(f'[upload] face detect: {r.stderr[:200]}')
     except Exception as e:
         print(f'[upload] face detect error: {e}')
     return None
 
-# ── In-process Wav2Lip inference ──────────────────────────────────────────────
-
+# ── In-process inference ───────────────────────────────────────────────────────
 def _run_batch(img_list, mel_list, frame_list, coord_list):
     IMG_SIZE = 96
     ib = np.asarray(img_list, dtype=np.float32)
@@ -175,12 +187,9 @@ def _run_batch(img_list, mel_list, frame_list, coord_list):
     out = []
     for p, f, (y1, y2, x1, x2) in zip(pred, frame_list, coord_list):
         fh, fw = y2-y1, x2-x1
-        # Lanczos upscale → sharper than bilinear
         p = cv2.resize(p.astype(np.uint8), (fw, fh), interpolation=cv2.INTER_LANCZOS4)
-        # Unsharp mask to recover detail lost at 96×96
         blurred = cv2.GaussianBlur(p, (0, 0), 2.5)
         p = np.clip(cv2.addWeighted(p, 1.4, blurred, -0.4, 0), 0, 255).astype(np.uint8)
-        # Feathered blend so paste boundary is invisible
         fe = max(4, min(fh, fw)//10)
         mask = np.ones((fh, fw), np.float32)
         mask[:fe,  :] *= np.linspace(0, 1, fe)[:, None]
@@ -194,34 +203,29 @@ def _run_batch(img_list, mel_list, frame_list, coord_list):
 
 
 def wav2lip_infer(face_path, wav_path, box, is_video):
-    IMG_SIZE = 96
-    BATCH    = 20
-    MEL_STEP = 16
+    IMG_SIZE = 96; BATCH = 20; MEL_STEP = 16
+    TARGET_FPS = 10.0
 
-    TARGET_FPS = 10.0   # fixed rate keeps inference fast for both image and video
     if is_video:
-        cap      = cv2.VideoCapture(face_path)
+        cap = cv2.VideoCapture(face_path)
         orig_fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
-        step     = max(1, round(orig_fps / TARGET_FPS))   # subsample to TARGET_FPS
+        step = max(1, round(orig_fps / TARGET_FPS))
         frames, idx = [], 0
         while True:
             ret, frm = cap.read()
             if not ret: break
-            if idx % step == 0:
-                frames.append(frm)
+            if idx % step == 0: frames.append(frm)
             idx += 1
         cap.release()
     else:
         frames = [cv2.imread(face_path)]
-    fps = TARGET_FPS
 
-    if not frames:
-        raise ValueError('No frames from face source')
+    if not frames: raise ValueError('No frames from face source')
+    fps = TARGET_FPS
 
     wav = wav2lip_audio.load_wav(wav_path, 16000)
     mel = wav2lip_audio.melspectrogram(wav)
-    if np.isnan(mel).any():
-        raise ValueError('Mel spectrogram has NaN')
+    if np.isnan(mel).any(): raise ValueError('Mel has NaN')
 
     mel_mult = 80.0 / fps
     mel_chunks, i = [], 0
@@ -229,10 +233,9 @@ def wav2lip_infer(face_path, wav_path, box, is_video):
         s = int(i * mel_mult)
         if s + MEL_STEP > mel.shape[1]:
             mel_chunks.append(mel[:, mel.shape[1]-MEL_STEP:]); break
-        mel_chunks.append(mel[:, s:s+MEL_STEP])
-        i += 1
+        mel_chunks.append(mel[:, s:s+MEL_STEP]); i += 1
 
-    frames    = frames[:len(mel_chunks)]
+    frames = frames[:len(mel_chunks)]
     is_static = len(frames) == 1
 
     if box and len(box) == 4:
@@ -240,12 +243,11 @@ def wav2lip_infer(face_path, wav_path, box, is_video):
         face_regions = [(frm[y1:y2, x1:x2].copy(), (y1,y2,x1,x2)) for frm in frames]
     else:
         import face_detection as fd_mod
-        det   = fd_mod.FaceAlignment(fd_mod.LandmarksType._2D, flip_input=False, device='cpu')
-        rgb   = cv2.cvtColor(frames[0], cv2.COLOR_BGR2RGB)
+        det = fd_mod.FaceAlignment(fd_mod.LandmarksType._2D, flip_input=False, device='cpu')
+        rgb = cv2.cvtColor(frames[0], cv2.COLOR_BGR2RGB)
         preds = det.get_detections_for_batch(np.array([rgb]))
         del det
-        if not preds or preds[0] is None:
-            raise ValueError('No face detected')
+        if not preds or preds[0] is None: raise ValueError('No face detected')
         rx1, ry1, rx2, ry2 = [int(v) for v in preds[0]]
         ry2 = min(frames[0].shape[0], ry2+10)
         face_regions = [(frm[ry1:ry2, rx1:rx2].copy(), (ry1,ry2,rx1,rx2)) for frm in frames]
@@ -253,31 +255,28 @@ def wav2lip_infer(face_path, wav_path, box, is_video):
     out_frames = []
     ib, mb, fb, cb = [], [], [], []
     for i, m_chunk in enumerate(mel_chunks):
-        idx  = 0 if is_static else i % len(frames)
+        idx = 0 if is_static else i % len(frames)
         face, coords = face_regions[idx]
         ib.append(cv2.resize(face, (IMG_SIZE, IMG_SIZE), interpolation=cv2.INTER_AREA))
-        mb.append(m_chunk)
-        fb.append(frames[idx].copy())
-        cb.append(coords)
+        mb.append(m_chunk); fb.append(frames[idx].copy()); cb.append(coords)
         if len(ib) >= BATCH:
             out_frames.extend(_run_batch(ib, mb, fb, cb))
             ib, mb, fb, cb = [], [], [], []
-    if ib:
-        out_frames.extend(_run_batch(ib, mb, fb, cb))
-
+    if ib: out_frames.extend(_run_batch(ib, mb, fb, cb))
     return out_frames, fps
 
-# ── Background lip-sync job ───────────────────────────────────────────────────
-
+# ── Background lip-sync job ────────────────────────────────────────────────────
 def run_lipsync_job(job_id, text, face_path, is_video, box, lang, rate_val):
     try:
+        if not WAV2LIP_MODEL:
+            raise RuntimeError('Wav2Lip model not loaded — check server logs')
+
         tmp      = tempfile.mkdtemp()
         voice    = VOICE_MAP.get(lang, 'en-US-JennyNeural')
         rate_pct = int((rate_val - 1.0) * 100)
         rate_str = f"+{rate_pct}%" if rate_pct >= 0 else f"{rate_pct}%"
         audio_path = os.path.join(tmp, f'{job_id}_speech.mp3')
 
-        # Full TTS audio
         r = subprocess.run(
             ['edge-tts', '--voice', voice, '--rate', rate_str,
              '--text', text, '--write-media', audio_path],
@@ -285,32 +284,27 @@ def run_lipsync_job(job_id, text, face_path, is_video, box, lang, rate_val):
         if r.returncode != 0 or not os.path.exists(audio_path):
             raise RuntimeError(r.stderr or 'edge-tts failed')
 
-        # MP3 → 16 kHz mono WAV (full duration, so lip sync covers whole answer)
         wav_path = os.path.join(tmp, f'{job_id}.wav')
         subprocess.run(['ffmpeg', '-y', '-i', audio_path, '-ar', '16000', '-ac', '1', wav_path],
                        capture_output=True)
         if not os.path.exists(wav_path):
             raise RuntimeError('WAV conversion failed')
 
-        # In-process inference on full audio — model already in RAM
         with infer_lock:
             out_frames, fps = wav2lip_infer(face_path, wav_path, box, is_video)
 
-        # Write AVI
         fh, fw = out_frames[0].shape[:2]
         avi_path = os.path.join(tmp, f'{job_id}.avi')
         vw = cv2.VideoWriter(avi_path, cv2.VideoWriter_fourcc(*'DIVX'), fps, (fw, fh))
         for frm in out_frames: vw.write(frm)
         vw.release()
 
-        # Mux full audio into MP4 — video and audio are now in perfect sync
         out_path = os.path.join(tmp, f'{job_id}_out.mp4')
         subprocess.run(
             ['ffmpeg', '-y', '-i', avi_path, '-i', audio_path,
              '-map', '0:v', '-map', '1:a',
              '-c:v', 'libx264', '-crf', '15', '-preset', 'medium', '-c:a', 'aac',
-             out_path],
-            capture_output=True)
+             out_path], capture_output=True)
         if not os.path.exists(out_path):
             raise RuntimeError('ffmpeg mux failed')
 
@@ -326,7 +320,6 @@ def run_lipsync_job(job_id, text, face_path, is_video, box, lang, rate_val):
         with jobs_lock:
             jobs[job_id] = {'status': 'error', 'error': str(e)}
 
-# ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.route('/upload', methods=['POST', 'OPTIONS'])
 def upload_avatar():
@@ -393,5 +386,6 @@ def job_status(job_id):
 
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5001)),
-            debug=False, use_reloader=False, threaded=True)
+    port = int(os.environ.get('PORT', 5001))
+    print(f'[startup] Listening on port {port}')
+    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False, threaded=True)

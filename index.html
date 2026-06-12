@@ -239,8 +239,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;heigh
 
   <!-- ── CENTER: AVATAR ── -->
   <div class="portrait-col" id="portrait-col">
-    <img id="avatar-img" src="./avatar.png" alt="AI Avatar"/>
-    <video id="avatar-video" playsinline></video>
+    <img id="avatar-img" src="./avatar.png" alt="AI Avatar" style="display:none"/>
+    <video id="avatar-video" playsinline autoplay muted loop></video>
     <div id="glow-ring"></div>
     <div id="expr-badge"></div>
     <div id="avatar-loading">
@@ -505,11 +505,26 @@ function closeSettings(){document.getElementById('settings-overlay').classList.r
 function overlayClick(e){if(e.target===document.getElementById('settings-overlay'))closeSettings();}
 
 function loadDefaultAvatar(){
-  fetch('avatar.png')
-    .then(r=>{if(!r.ok)throw new Error();return r.blob();})
-    .then(b=>blobToBase64(b))
-    .then(b64=>{avatarBase64=b64;avatarImg.src=b64;})
-    .catch(()=>{statusEl.textContent='Upload a photo to begin';});
+  // Try new.mp4 (video) first, then fall back to avatar.png (image)
+  fetch('new.mp4',{method:'HEAD'})
+    .then(r=>{
+      if(!r.ok) throw new Error();
+      avatarIsVideo=true;
+      avatarVideo.src='new.mp4';
+      avatarVideo.style.display='';
+      avatarImg.style.display='none';
+      avatarVideo.muted=true; avatarVideo.loop=true;
+      avatarVideo.play().catch(()=>{});
+      return fetch('new.mp4').then(r2=>r2.blob()).then(b=>blobToBase64(b));
+    })
+    .then(b64=>{if(b64)avatarBase64=b64;})
+    .catch(()=>{
+      fetch('avatar.png')
+        .then(r=>{if(!r.ok)throw new Error();return r.blob();})
+        .then(b=>blobToBase64(b))
+        .then(b64=>{avatarBase64=b64;avatarImg.src=b64;avatarImg.style.display='';avatarVideo.style.display='none';})
+        .catch(()=>{statusEl.textContent='Upload a photo to begin';});
+    });
 }
 function blobToBase64(blob){
   return new Promise((res,rej)=>{
@@ -592,7 +607,14 @@ function setStatus(txt,mode){
 function resetAvatarMedia(){
   avatarLoading.classList.remove('show');
   if(avatarIsVideo&&avatarObjectUrl){
+    // User-uploaded video
     avatarVideo.src=avatarObjectUrl;
+    avatarVideo.muted=true;avatarVideo.loop=true;
+    avatarVideo.style.display='block';avatarImg.style.display='none';
+    avatarVideo.play().catch(()=>{});
+  }else if(avatarIsVideo){
+    // Default new.mp4 (no object URL)
+    avatarVideo.src='new.mp4';
     avatarVideo.muted=true;avatarVideo.loop=true;
     avatarVideo.style.display='block';avatarImg.style.display='none';
     avatarVideo.play().catch(()=>{});
