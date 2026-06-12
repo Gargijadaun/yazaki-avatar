@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: yazaki-avatar
+    env: docker
+    plan: standard          # needs at least 2GB RAM for the model
+    dockerfilePath: Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: 5001
+      - key: GROQ_API_KEY
+        sync: false          # set this manually in Render dashboard — never commit the value
+    disk:
+      name: avatar-uploads
+      mountPath: /app/uploads
+      sizeGB: 1

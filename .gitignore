@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# Wav2Lip temp files
+Wav2Lip/temp/
+uploads/
+
+# Test audio files
+*.mp3
+*.wav
+
+# OS
+.DS_Store
+Thumbs.db

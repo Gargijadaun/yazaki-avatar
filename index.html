@@ -1,0 +1,760 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>ProtoPersona — AI Voice Avatar</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css"/>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700&family=DM+Sans:ital,wght@0,300;0,400;0,500;1,400&display=swap');
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0d0d14;--surface:#13131f;--surface2:#1a1a2b;--border:#252538;
+  --accent:#7c6aff;--green:#1D9E75;--text:#e4e4f0;--muted:#6b6b8a;--danger:#ff4d6a;
+}
+html,body{height:100%;background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;overflow:hidden;}
+
+/* ── MAIN LAYOUT ── */
+.app{display:flex;height:100vh;width:100vw;}                   
+
+/* ── LEFT: FULL PORTRAIT ── */
+.portrait-col{
+  position:relative;
+  flex:0 0 380px;
+  height:100vh;
+  overflow:hidden;
+  background:#06060e;
+}
+
+#avatar-img{
+  width:100%;height:100%;object-fit:cover;object-position:center top;
+  display:block;filter:brightness(.97) saturate(1.08);
+  transition:transform .3s ease;
+}
+#avatar-video{
+  position:absolute;inset:0;width:100%;height:100%;
+  object-fit:cover;object-position:center top;display:none;background:#06060e;
+}
+
+/* glow border on portrait */
+#glow-ring{
+  position:absolute;inset:0;pointer-events:none;
+  border:3px solid transparent;transition:border-color .3s,box-shadow .3s;
+}
+#glow-ring.listening{border-color:var(--green);box-shadow:inset 0 0 40px rgba(29,158,117,.25);animation:glowpulse 1.2s ease-in-out infinite;}
+#glow-ring.speaking{border-color:var(--accent);box-shadow:inset 0 0 40px rgba(124,106,255,.3);animation:glowpulse .5s ease-in-out infinite;}
+@keyframes glowpulse{0%,100%{opacity:1}50%{opacity:.4}}
+
+/* portrait overlay: bottom gradient with status + controls */
+.portrait-overlay{
+  position:absolute;bottom:0;left:0;right:0;
+  background:linear-gradient(to top, rgba(6,6,14,.98) 0%, rgba(6,6,14,.7) 50%, transparent 100%);
+  padding:20px 20px 24px;
+  display:flex;flex-direction:column;gap:14px;
+}
+
+.avatar-name{
+  font-family:'Syne',sans-serif;font-size:1.15rem;font-weight:700;
+  color:#fff;letter-spacing:.04em;
+}
+.avatar-name span{color:var(--muted);font-size:.75rem;font-weight:400;display:block;margin-top:2px;letter-spacing:.08em;}
+
+#status{font-size:.78rem;color:var(--muted);letter-spacing:.03em;min-height:16px;}
+
+/* mic row */
+.controls-row{display:flex;align-items:center;justify-content:center;gap:12px;}
+
+#mic-btn{
+  width:48px;height:48px;border-radius:50%;border:1.5px solid var(--border);
+  background:rgba(26,26,43,.85);backdrop-filter:blur(8px);
+  cursor:pointer;display:flex;align-items:center;justify-content:center;
+  font-size:20px;color:var(--muted);flex-shrink:0;
+  transition:background .2s,border-color .2s,transform .1s,color .2s;
+}
+#mic-btn:hover{border-color:var(--accent);color:var(--accent);}
+#mic-btn.active{background:rgba(29,158,117,.15);border-color:var(--green);color:var(--green);}
+#mic-btn:active{transform:scale(.93);}
+
+/* upload hint on portrait hover */
+.upload-hint{
+  position:absolute;top:16px;right:16px;
+  background:rgba(13,13,20,.7);backdrop-filter:blur(6px);
+  border:1px solid var(--border);border-radius:10px;
+  padding:7px 12px;display:flex;align-items:center;gap:6px;
+  cursor:pointer;opacity:0;transition:opacity .25s;font-size:.72rem;color:var(--muted);
+}
+.portrait-col:hover .upload-hint{opacity:1;}
+#photo-input{display:none;}
+
+
+/* loading overlay */
+#avatar-loading{
+  position:absolute;inset:0;display:none;align-items:center;justify-content:center;
+  background:rgba(6,6,14,.65);flex-direction:column;gap:10px;
+}
+#avatar-loading.show{display:flex;}
+#avatar-loading span{font-size:.76rem;color:var(--muted);}
+.spinner{width:30px;height:30px;border:2.5px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite;}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+
+/* ── CHAT PANELS ── */
+.chat-col{
+  flex:1;display:flex;flex-direction:column;height:100vh;min-width:0;
+}
+.chat-left{border-right:1px solid var(--border);}
+.chat-right{border-left:1px solid var(--border);}
+@media(max-width:900px){
+  .chat-left{display:none;}
+  .portrait-col{flex:0 0 100vw;position:fixed;inset:0;z-index:1;}
+  .chat-right{position:fixed;inset:0;z-index:2;background:var(--bg);transform:translateX(100%);transition:transform .3s ease;}
+  .chat-right.open{transform:translateX(0);}
+}
+
+/* chat top bar */
+.chat-topbar{
+  display:flex;align-items:center;gap:10px;padding:14px 16px;
+  border-bottom:1px solid var(--border);flex-shrink:0;
+}
+.chat-topbar-title{font-family:'Syne',sans-serif;font-size:.75rem;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);flex:1;}
+
+.icon-btn{
+  width:34px;height:34px;border-radius:8px;border:1px solid var(--border);
+  background:transparent;color:var(--muted);cursor:pointer;font-size:16px;
+  display:flex;align-items:center;justify-content:center;
+  transition:border-color .18s,color .18s;
+}
+.icon-btn:hover{border-color:var(--accent);color:var(--accent);}
+.icon-btn.on{border-color:var(--accent);color:var(--accent);background:rgba(124,106,255,.1);}
+
+/* chat messages */
+.chat-messages{
+  flex:1;overflow-y:auto;padding:16px;
+  display:flex;flex-direction:column;gap:12px;
+}
+.chat-messages::-webkit-scrollbar{width:4px;}
+.chat-messages::-webkit-scrollbar-track{background:transparent;}
+.chat-messages::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px;}
+
+.msg{display:flex;flex-direction:column;gap:3px;}
+.mrole{font-size:.68rem;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);}
+.mrole.ai{color:var(--accent);}
+.mtext{font-size:.86rem;line-height:1.65;color:var(--text);}
+.mtext.dim{color:var(--muted);font-style:italic;}
+
+/* type row */
+.type-row{
+  display:flex;gap:8px;padding:12px 14px;
+  border-top:1px solid var(--border);flex-shrink:0;
+}
+.type-row input{
+  flex:1;background:var(--surface2);border:1px solid var(--border);color:var(--text);
+  font-family:'DM Sans',sans-serif;font-size:.84rem;border-radius:10px;
+  padding:9px 13px;outline:none;transition:border-color .2s;
+}
+.type-row input:focus{border-color:var(--accent);}
+.send-btn{
+  flex-shrink:0;background:var(--accent);border:none;color:#fff;
+  border-radius:10px;padding:0 16px;font-size:18px;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;
+  transition:opacity .18s,transform .1s;
+}
+.send-btn:hover{opacity:.85;}
+.send-btn:active{transform:scale(.96);}
+
+#errtxt{font-size:.74rem;color:var(--danger);padding:4px 14px;min-height:16px;flex-shrink:0;}
+
+/* ── SETTINGS DRAWER ── */
+.settings-overlay{
+  position:fixed;inset:0;z-index:100;
+  background:rgba(6,6,14,.6);backdrop-filter:blur(4px);
+  display:none;align-items:flex-end;justify-content:flex-end;
+}
+.settings-overlay.open{display:flex;}
+.settings-drawer{
+  width:360px;height:100vh;background:var(--surface);
+  border-left:1px solid var(--border);overflow-y:auto;
+  display:flex;flex-direction:column;
+}
+@media(max-width:700px){.settings-drawer{width:100vw;height:85vh;border-radius:20px 20px 0 0;border:none;border-top:1px solid var(--border);}}
+.settings-drawer::-webkit-scrollbar{width:4px;}
+.settings-drawer::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px;}
+
+.drawer-header{
+  display:flex;align-items:center;padding:16px 18px;
+  border-bottom:1px solid var(--border);flex-shrink:0;
+}
+.drawer-header-title{font-family:'Syne',sans-serif;font-size:.72rem;font-weight:600;letter-spacing:.13em;text-transform:uppercase;color:var(--muted);flex:1;}
+
+.drawer-body{padding:18px;display:flex;flex-direction:column;gap:18px;}
+
+.section{display:flex;flex-direction:column;gap:10px;}
+.section-title{font-family:'Syne',sans-serif;font-size:.65rem;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);border-bottom:1px solid var(--border);padding-bottom:6px;}
+
+.field{display:flex;flex-direction:column;gap:5px;}
+label{font-size:.75rem;color:var(--muted);}
+input[type=password],input[type=text],select,textarea{
+  background:var(--bg);border:1px solid var(--border);color:var(--text);
+  font-family:'DM Sans',sans-serif;font-size:.83rem;border-radius:9px;
+  padding:8px 11px;outline:none;width:100%;transition:border-color .2s;
+}
+input:focus,select:focus,textarea:focus{border-color:var(--accent);}
+textarea{resize:vertical;min-height:60px;line-height:1.5;}
+select option{background:var(--surface);}
+.field-row{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+
+input[type=range]{
+  -webkit-appearance:none;appearance:none;width:100%;height:3px;
+  background:var(--border);border-radius:2px;outline:none;border:none;padding:0;
+}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:var(--accent);cursor:pointer;}
+.range-row{display:flex;align-items:center;gap:10px;}
+.range-val{font-size:.75rem;color:var(--accent);min-width:30px;text-align:right;}
+
+.photo-strip{display:flex;gap:8px;flex-wrap:wrap;}
+.upload-btn-sm{
+  width:46px;height:52px;border-radius:8px;border:1px dashed var(--border);
+  background:var(--bg);display:flex;align-items:center;justify-content:center;
+  font-size:18px;color:var(--muted);cursor:pointer;transition:border-color .2s,color .2s;
+}
+.upload-btn-sm:hover{border-color:var(--accent);color:var(--accent);}
+</style>
+</head>
+<body>
+
+<div class="app">
+
+  <!-- ── LEFT: USER CHAT ── -->
+  <div class="chat-col chat-left" id="chat-left-col">
+    <div class="chat-topbar">
+      <span class="chat-topbar-title">You</span>
+    </div>
+    <div class="chat-messages" id="chat-user"></div>
+    <div id="errtxt"></div>
+    <div class="type-row">
+      <input type="text" id="type-input" placeholder="Type a message…"/>
+      <button class="send-btn" onclick="sendTyped()" title="Send"><i class="ti ti-send"></i></button>
+    </div>
+  </div>
+
+  <!-- ── CENTER: AVATAR ── -->
+  <div class="portrait-col" id="portrait-col">
+    <img id="avatar-img" src="./avatar.png" alt="AI Avatar"/>
+    <video id="avatar-video" playsinline></video>
+    <div id="glow-ring"></div>
+    <div id="expr-badge"></div>
+    <div id="avatar-loading">
+      <div class="spinner"></div>
+      <span>Generating lip sync…</span>
+    </div>
+    <div class="upload-hint" onclick="document.getElementById('photo-input').click()">
+      <i class="ti ti-camera" style="font-size:15px"></i>
+      <span>Change photo / video</span>
+    </div>
+
+    <!-- bottom overlay -->
+    <div class="portrait-overlay">
+      <div>
+        <div class="avatar-name">AI Assistant <span>PROTOPERSONA · LIVE</span></div>
+        <div id="status">Ready — click mic to begin</div>
+      </div>
+      <div class="controls-row">
+        <button id="mic-btn" onclick="toggleMic()" aria-label="Toggle microphone">
+          <i class="ti ti-microphone" id="mic-icon"></i>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── RIGHT: AI CHAT ── -->
+  <div class="chat-col chat-right" id="chat-right-col">
+    <div class="chat-topbar">
+      <span class="chat-topbar-title">Assistant</span>
+      <button class="icon-btn" id="tog-voice-btn" onclick="toggleVoice()" title="Toggle voice"><i class="ti ti-volume" id="voice-icon"></i></button>
+      <button class="icon-btn" onclick="clearHistory()" title="Clear chat"><i class="ti ti-trash"></i></button>
+      <button class="icon-btn" onclick="openSettings()" title="Settings"><i class="ti ti-settings"></i></button>
+    </div>
+    <div class="chat-messages" id="chat-ai">
+      <div class="msg">
+        <div class="mrole ai">Assistant</div>
+        <div class="mtext">Hi! Upload your photo via Settings, then click the mic or type below.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── SETTINGS DRAWER OVERLAY ── -->
+<div class="settings-overlay" id="settings-overlay" onclick="overlayClick(event)">
+  <div class="settings-drawer" id="settings-drawer">
+    <div class="drawer-header">
+      <span class="drawer-header-title">Settings</span>
+      <button class="icon-btn" onclick="closeSettings()"><i class="ti ti-x"></i></button>
+    </div>
+    <div class="drawer-body">
+
+      <div class="section">
+        <div class="section-title">AI</div>
+        <div class="field">
+          <label>Groq API Key</label>
+          <input type="password" id="groq-key" placeholder="gsk_…" value="" autocomplete="off"/>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label>Model</label>
+            <select id="groq-model">
+              <option value="llama-3.3-70b-versatile">Llama 3.3 70B</option>
+              <option value="llama3-8b-8192">Llama 3 8B</option>
+              <option value="mixtral-8x7b-32768">Mixtral 8x7B</option>
+              <option value="gemma2-9b-it">Gemma 2 9B</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Language</label>
+            <select id="lang-sel">
+              <option value="en-US">English (US)</option>
+              <option value="en-GB">English (UK)</option>
+              <option value="hi-IN">Hindi</option>
+              <option value="es-ES">Spanish</option>
+              <option value="fr-FR">French</option>
+              <option value="de-DE">German</option>
+              <option value="ja-JP">Japanese</option>
+            </select>
+          </div>
+        </div>
+        <div class="field">
+          <label>System prompt</label>
+          <textarea id="sysprompt">You are an AI assistant trained exclusively on the Yazaki India Domestic Travel Policy (Ix-HR-xx-Y-05.4, Revision 02, effective 01/Jan/2024). Answer ONLY based on the policy content below. If a question is not covered by this policy, say "That information is not covered in the Domestic Travel Policy." Keep responses concise and clear since they will be spoken aloud.
+
+=== YAZAKI INDIA DOMESTIC TRAVEL POLICY ===
+
+DEFINITIONS:
+- Domestic Travel: Journey beyond 100 km from posting location or outside city limits.
+- Lodging Expenses: Hotel/guest house/dormitory costs (EXCLUDING taxes).
+- Boarding Expenses: Food and beverages (INCLUDING taxes).
+- Local Conveyance: Travel within the destination city.
+
+TRAVEL REQUEST: Submit approved requests to administration at least 7 days before travel date.
+
+TABLE A — MODE OF TRAVEL & LOCAL CONVEYANCE:
+| Grade       | Travel Mode                         | Local Conveyance       |
+|-------------|-------------------------------------|------------------------|
+| E6/E7/E8    | Air Economy / Rail AC 2 Tier        | Innova                 |
+| E4/E5       | Air Economy / Rail AC 2 Tier        | AC Sedan/Innova*       |
+| E1/E2/E3    | Rail AC 2 Tier                      | AC Taxi/Sedan          |
+| D1/D2/D3    | Rail AC 3 Tier**                    | Auto/Local Public/OLA  |
+| B/C-1/2/3   | Rail AC 3 Tier / Volvo Bus          | Three-wheeler/Bus      |
+
+Notes on Table A:
+- E1-E3 may fly (economy) with Dept Head + HQ HR HEAD recommendation.
+- *E4/E5 may use Innova when 2 or more travellers.
+- **D1-D3 may fly in emergency or if rail/road journey exceeds 12 hours — needs Dept Head recommendation + HQ HR HEAD approval; book at least 3 days in advance.
+- OLA/Uber: reimbursed at actual fare with bill. If 2+ members share taxi, only one person claims.
+
+TABLE B — LODGING (L) & BOARDING (B) DAILY LIMITS (amounts in INR):
+Grade       | A-Class City L / B | B-Class City L / B | C-Class City L / B
+E6/E7/E8    | 7000 / 1750        | 6000 / 1600        | 5500 / 1500
+E4/E5       | 6000 / 1500        | 5250 / 1400        | 4750 / 1300
+E1/E2/E3    | 5500 / 1300        | 5000 / 1200        | 4500 / 1100
+D1/D2/D3    | 4000 / 1100        | 3500 / 950         | 3000 / 800
+B/C-1/2/3   | 3000 / 700         | 2500 / 600         | 2000 / 500
+Grade A     | 2500 / 500         | 2000 / 400         | 1500 / 300
+
+Lodging notes: Bills required. Taxes on lodging are ADDITIONAL to limits. Boarding amounts already include taxes. Guest house/service apartments are first priority.
+
+CITY CLASSIFICATION:
+- A-Class: Delhi & NCR, Mumbai, Chennai, Kolkata, Bangalore, Hyderabad.
+- B-Class: All state capitals, Ahmedabad, Baroda, Pune, Kochi.
+- C-Class: All other cities.
+
+TABLE C — PER DIEM ALLOWANCES (when NO bills submitted, in INR):
+Grade       | A-Class | B-Class | C-Class
+E6/E7/E8    | 2000    | 1600    | 1500
+E4/E5       | 1800    | 1500    | 1400
+E1/E2/E3    | 1600    | 1300    | 1200
+D1/D2/D3    | 1400    | 1100    | 1000
+B/C-1/2/3   | 1000    | 700     | 600
+
+TABLE D — OUT-OF-POCKET EXPENSES (per day, in INR, for items without bills — max 7 days):
+E6/E7/E8 and E4/E5: ₹200 (all city classes)
+E1/E2/E3, D1/D2/D3, B/C-1/2/3: ₹100 (all city classes)
+
+KEY RULES:
+1. Claim reimbursement within 7 DAYS of returning. Delays need valid reason endorsed by Sanctioning Authority.
+2. Travel advance must be cleared within 7 days of return; otherwise recovered from salary. Surplus advance deposited to Finance within 7 days.
+3. Day counting: <10 hours = half day; ≥10 hours = full day (from departure to return).
+4. If stay extended for personal reasons, extra Lodging & Boarding borne by employee; apply leave for extra day.
+5. Company-arranged accommodation: claim Boarding only (with bills).
+6. Incidental reimbursements allowed: postage/courier, porter charges, laundry (if travel >3 days), excess luggage, authorized agent service charges.
+7. Group travel common expenses claimed by senior-most employee only.
+8. Guest entertainment needs separate voucher with HoD sanction.
+9. COMPENSATORY HOLIDAY IS SUSPENDED TILL FURTHER NOTICE.
+10. Any exception requires HQ HR/Admin & CEO approval (for direct reportees only).
+11. Supporting documents required: boarding pass + ticket (air); ticket number (train/bus); taxi stand receipt (taxi); hotel bill (lodging/boarding); food bills (meals).
+
+GST INPUT CREDIT: Employee must ensure correct company name, address, and GST number appear on hotel bills before checkout. YIPL GST registrations: Uttarakhand, Rajasthan, Jharkhand, Gujarat, Maharashtra, Karnataka, Tamil Nadu, Delhi, Uttar Pradesh, Madhya Pradesh.
+===========================================</textarea>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">Voice</div>
+        <div class="field">
+          <label>TTS Voice</label>
+          <select id="voice-sel"><option value="">— browser default —</option></select>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label>Speed</label>
+            <div class="range-row">
+              <input type="range" id="rate-range" min="0.5" max="2" step="0.05" value="1.05" oninput="document.getElementById('rate-val').textContent=this.value"/>
+              <span class="range-val" id="rate-val">1.05</span>
+            </div>
+          </div>
+          <div class="field">
+            <label>Pitch</label>
+            <div class="range-row">
+              <input type="range" id="pitch-range" min="0.5" max="2" step="0.05" value="1.1" oninput="document.getElementById('pitch-val').textContent=this.value"/>
+              <span class="range-val" id="pitch-val">1.1</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">Lip Sync</div>
+        <div class="field-row">
+          <div class="field">
+            <label>Mode</label>
+            <select id="lip-sync-mode">
+              <option value="wav2p" selected>Wav2P endpoint</option>
+              <option value="browser">Browser TTS</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Endpoint</label>
+            <input type="text" id="wav2p-url" value="" autocomplete="off"/>
+          </div>
+        </div>
+        <div class="field">
+          <label>Auth token</label>
+          <input type="password" id="wav2p-key" placeholder="Optional bearer token" autocomplete="off"/>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">Avatar</div>
+        <div class="field">
+          <label>Photo or Video <span style="color:var(--accent);font-size:.7rem">(video = better quality)</span></label>
+          <div class="photo-strip" id="photo-strip">
+            <div class="upload-btn-sm" onclick="document.getElementById('photo-input').click()" title="Upload photo or video">
+              <i class="ti ti-plus"></i>
+            </div>
+          </div>
+          <div style="font-size:.7rem;color:var(--muted);margin-top:4px">For video: use a short 3–10 s clip of your face. Wav2Lip loops it to match audio length.</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<input type="file" id="photo-input" accept="image/*,video/mp4,video/webm,video/ogg"/>
+
+<script>
+let isListening=false,isSpeaking=false,recognition=null;
+let waveRaf=null,mouthTimer=null,blinkTimer=null;
+let lipSyncRaf=null,lipSyncAudioCtx=null,lipSyncAudioSource=null,lipSyncAnalyser=null;
+let history=[];
+let voiceOn=true;
+
+// Auto-detect server URL and load env-based config (Groq key etc.)
+(async()=>{
+  const base=window.location.origin;          // works both locally and on Render
+  document.getElementById('wav2p-url').value=base+'/wav2p';
+  try{
+    const cfg=await fetch(base+'/config').then(r=>r.json());
+    if(cfg.groq_key) document.getElementById('groq-key').value=cfg.groq_key;
+  }catch(e){}
+})();
+let avatarBase64='';
+let avatarIsVideo=false,avatarObjectUrl=null;
+
+const avatarImg    =document.getElementById('avatar-img');
+const avatarVideo  =document.getElementById('avatar-video');
+const avatarLoading=document.getElementById('avatar-loading');
+const ring         =document.getElementById('glow-ring');
+const statusEl     =document.getElementById('status');
+const micBtn       =document.getElementById('mic-btn');
+const micIcon      =document.getElementById('mic-icon');
+const chatBox      =document.getElementById('chat-ai');
+const userBox      =document.getElementById('chat-user');
+const errEl        =document.getElementById('errtxt');
+const mpath        =document.getElementById('mpath');
+const moverlay     =document.getElementById('mouth-overlay');
+const exprBadge    =document.getElementById('expr-badge');
+const blinkL       =document.getElementById('blink-l');
+const blinkR       =document.getElementById('blink-r');
+const typeInput    =document.getElementById('type-input');
+const voiceSel     =document.getElementById('voice-sel');
+const lipSyncMode  =document.getElementById('lip-sync-mode');
+const wav2pUrl     =document.getElementById('wav2p-url');
+const wav2pKey     =document.getElementById('wav2p-key');
+
+function openSettings(){document.getElementById('settings-overlay').classList.add('open');}
+function closeSettings(){document.getElementById('settings-overlay').classList.remove('open');}
+function overlayClick(e){if(e.target===document.getElementById('settings-overlay'))closeSettings();}
+
+function loadDefaultAvatar(){
+  fetch('avatar.png')
+    .then(r=>{if(!r.ok)throw new Error();return r.blob();})
+    .then(b=>blobToBase64(b))
+    .then(b64=>{avatarBase64=b64;avatarImg.src=b64;})
+    .catch(()=>{statusEl.textContent='Upload a photo to begin';});
+}
+function blobToBase64(blob){
+  return new Promise((res,rej)=>{
+    const r=new FileReader();
+    r.onload=()=>res(r.result);r.onerror=rej;r.readAsDataURL(blob);
+  });
+}
+loadDefaultAvatar();
+
+async function uploadAvatarToServer(b64){
+  const endpoint=wav2pUrl.value.trim();
+  if(!endpoint)return;
+  const uploadUrl=endpoint.replace(/\/wav2p\/?$/,'')+'/upload';
+  statusEl.textContent='Uploading to server…';
+  try{
+    const res=await fetch(uploadUrl,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({avatar:b64}),
+    });
+    const d=await res.json();
+    if(!res.ok)throw new Error(d.error||res.status);
+    statusEl.textContent=(d.is_video?'Video':'Photo')+' uploaded — ready!';
+  }catch(e){
+    errEl.textContent='Server upload failed: '+e.message+' (check server is running)';
+    statusEl.textContent='Ready (server upload failed)';
+  }
+}
+
+document.getElementById('photo-input').addEventListener('change',async e=>{
+  const f=e.target.files[0];if(!f)return;
+  try{
+    avatarBase64=await blobToBase64(f);
+    if(f.type.startsWith('video/')){
+      avatarIsVideo=true;
+      if(avatarObjectUrl)URL.revokeObjectURL(avatarObjectUrl);
+      avatarObjectUrl=URL.createObjectURL(f);
+      avatarVideo.src=avatarObjectUrl;
+      avatarVideo.muted=true;avatarVideo.loop=true;
+      avatarVideo.style.display='block';avatarImg.style.display='none';
+      avatarVideo.play().catch(()=>{});
+      statusEl.textContent='Video loading…';
+    }else{
+      avatarIsVideo=false;
+      avatarImg.src=avatarBase64;
+      avatarImg.style.display='';avatarVideo.style.display='none';
+      statusEl.textContent='Photo loading…';
+    }
+    closeSettings();
+    await uploadAvatarToServer(avatarBase64);
+  }catch(err){errEl.textContent='Could not read file: '+err.message;}
+});
+
+function populateVoices(){
+  const voices=speechSynthesis.getVoices();
+  voiceSel.innerHTML='<option value="">— browser default —</option>';
+  voices.forEach((v,i)=>{
+    const o=document.createElement('option');
+    o.value=i;o.textContent=`${v.name} (${v.lang})`;
+    if(/samantha|karen|ava|zira|female/i.test(v.name))o.selected=true;
+    voiceSel.appendChild(o);
+  });
+}
+if(window.speechSynthesis){speechSynthesis.onvoiceschanged=populateVoices;setTimeout(populateVoices,500);}
+
+function toggleVoice(){
+  voiceOn=!voiceOn;
+  const btn=document.getElementById('tog-voice-btn');
+  const ico=document.getElementById('voice-icon');
+  btn.classList.toggle('on',voiceOn);
+  ico.className=voiceOn?'ti ti-volume':'ti ti-volume-off';
+}
+function toggleAnim(){animOn=!animOn;document.getElementById('tog-anim-btn').classList.toggle('on',animOn);}
+function clearHistory(){history=[];chatBox.innerHTML='';userBox.innerHTML='';addMsg('Assistant','Chat cleared. How can I help?');}
+
+function setStatus(txt,mode){
+  statusEl.textContent=txt;ring.className='';
+  if(mode)ring.classList.add(mode);
+}
+function resetAvatarMedia(){
+  avatarLoading.classList.remove('show');
+  if(avatarIsVideo&&avatarObjectUrl){
+    avatarVideo.src=avatarObjectUrl;
+    avatarVideo.muted=true;avatarVideo.loop=true;
+    avatarVideo.style.display='block';avatarImg.style.display='none';
+    avatarVideo.play().catch(()=>{});
+  }else{
+    avatarVideo.pause();avatarVideo.removeAttribute('src');
+    avatarVideo.style.display='none';avatarImg.style.display='';
+  }
+}
+function showExpr(emoji,label){
+  if(!animOn)return;
+  exprBadge.textContent=emoji+' '+label;exprBadge.classList.add('visible');
+  setTimeout(()=>exprBadge.classList.remove('visible'),2200);
+}
+function addMsg(role,txt,dim=false){
+  const container=role==='You'?userBox:chatBox;
+  const d=document.createElement('div');d.className='msg';
+  const r=document.createElement('div');r.className='mrole'+(role==='Assistant'?' ai':'');r.textContent=role;
+  const t=document.createElement('div');t.className='mtext'+(dim?' dim':'');t.textContent=txt;
+  d.appendChild(r);d.appendChild(t);container.appendChild(d);container.scrollTop=container.scrollHeight;return t;
+}
+function startWave(){}
+function animMouth(){}
+function stopLipSyncAudio(){}
+async function speakWithLipSync(txt){
+  const endpoint=wav2pUrl.value.trim();
+  const headers={'Content-Type':'application/json'};
+  const token=wav2pKey.value.trim();if(token)headers.Authorization='Bearer '+token;
+  const base=endpoint.replace(/\/wav2p\/?$/,'');
+  setStatus('Generating lip sync…','speaking');
+  avatarLoading.classList.add('show');
+  try{
+    const res=await fetch(endpoint,{
+      method:'POST',headers,
+      body:JSON.stringify({
+        text:txt,
+        avatar:avatarIsVideo?'':avatarBase64,
+        lang:document.getElementById('lang-sel').value,
+        rate:parseFloat(document.getElementById('rate-range').value),
+      }),
+    });
+    const {job_id,error}=await res.json();
+    if(error||!job_id)throw new Error(error||'No job ID');
+    for(let i=0;i<120;i++){
+      await new Promise(r=>setTimeout(r,1000));
+      const s=await fetch(`${base}/status/${job_id}`).then(r=>r.json()).catch(()=>({status:'error'}));
+      if(s.status==='done'&&s.videoUrl){
+        avatarLoading.classList.remove('show');
+        avatarImg.style.display='none';
+        avatarVideo.muted=false;
+        avatarVideo.loop=false;
+        avatarVideo.style.display='block';
+        avatarVideo.src=s.videoUrl;
+        setStatus('Speaking…','speaking');
+        await avatarVideo.play().catch(()=>{});
+        await new Promise(resolve=>{avatarVideo.onended=resolve;avatarVideo.onerror=resolve;});
+        isSpeaking=false;
+        resetAvatarMedia();
+        setStatus('Ready — click mic to begin');
+        return;
+      }
+      if(s.status==='error')throw new Error(s.error||'Job failed');
+    }
+    throw new Error('Timeout');
+  }catch(e){
+    errEl.textContent='Lip sync error: '+e.message;
+    avatarLoading.classList.remove('show');
+    isSpeaking=false;
+    setStatus('Ready — click mic to begin');
+  }
+}
+
+async function speakText(txt){
+  isSpeaking=true;
+  if(lipSyncMode.value==='wav2p'&&wav2pUrl.value.trim()){
+    // Wav2Lip mode: wait for video with embedded audio, no browser TTS
+    await speakWithLipSync(txt);
+    return;
+  }
+  // Browser TTS fallback
+  if(!voiceOn||!window.speechSynthesis)return;
+  speechSynthesis.cancel();
+  const u=new SpeechSynthesisUtterance(txt);
+  u.rate=parseFloat(document.getElementById('rate-range').value);
+  u.pitch=parseFloat(document.getElementById('pitch-range').value);
+  u.lang=document.getElementById('lang-sel').value;
+  const voices=speechSynthesis.getVoices();const idx=voiceSel.value;
+  if(idx!==''&&voices[idx])u.voice=voices[idx];
+  u.onstart=()=>{setStatus('Speaking…','speaking');animMouth(true);startWave(true);};
+  u.onend=u.onerror=()=>{
+    isSpeaking=false;animMouth(false);
+    if(isListening){setStatus('Listening…','listening');avatarImg.classList.add('listening');startWave(true);}
+    else{setStatus('Ready — click mic to begin');startWave(false);}
+  };
+  speechSynthesis.speak(u);
+}
+function detectSentiment(txt){
+  const t=txt.toLowerCase();
+  if(/sorry|apologize|unfortunate|can't|cannot|problem/.test(t))return['😔','apologetic'];
+  if(/great|excellent|wonderful|happy|glad|absolutely/.test(t))return['😊','positive'];
+  if(/sure|of course|certainly|help/.test(t))return['👍','helpful'];
+  if(/interesting|tell me|explain|understand|actually/.test(t))return['🤔','thoughtful'];
+  return['🗣️','speaking'];
+}
+async function callGroq(userMsg){
+  const key=document.getElementById('groq-key').value.trim();
+  if(!key){errEl.textContent='⚠ Enter your Groq API key in Settings.';return null;}
+  errEl.textContent='';
+  const sys=document.getElementById('sysprompt').value.trim();
+  const model=document.getElementById('groq-model').value;
+  history.push({role:'user',content:userMsg});
+  try{
+    const res=await fetch('https://api.groq.com/openai/v1/chat/completions',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+key},
+      body:JSON.stringify({model,messages:[{role:'system',content:sys},...history],max_tokens:150,temperature:0.3}),
+    });
+    if(!res.ok){const e=await res.json();errEl.textContent='Groq error: '+(e.error?.message||res.status);history.pop();return null;}
+    const d=await res.json();
+    const reply=d.choices[0].message.content.trim();
+    history.push({role:'assistant',content:reply});return reply;
+  }catch(e){errEl.textContent='Network error: '+e.message;history.pop();return null;}
+}
+async function processMessage(said){
+  said=said.trim();if(!said)return;
+  setStatus('Thinking…');ring.className='';
+  startWave(false);avatarImg.classList.remove('listening');
+  const thinkEl=addMsg('Assistant','Thinking…',true);
+  const reply=await callGroq(said);
+  thinkEl.parentElement.remove();
+  if(reply){addMsg('Assistant',reply);await speakText(reply);}
+  else{
+    if(isListening){setStatus('Listening…','listening');startWave(true);avatarImg.classList.add('listening');}
+    else setStatus('Ready — click mic to begin');
+  }
+}
+function sendTyped(){const txt=typeInput.value.trim();if(!txt)return;addMsg('You',txt);typeInput.value='';processMessage(txt);}
+typeInput.addEventListener('keydown',e=>{if(e.key==='Enter')sendTyped();});
+function setupRecog(){
+  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  if(!SR){errEl.textContent='⚠ Speech recognition not supported. Use Chrome or Edge.';return null;}
+  const r=new SR();r.continuous=true;r.interimResults=true;
+  r.lang=document.getElementById('lang-sel').value;
+  let final='',interimEl=null,silTimer=null;
+  r.onstart=()=>{setStatus('Listening…','listening');startWave(true);avatarImg.classList.add('listening');};
+  r.onresult=e=>{
+    let itr='';final='';
+    for(let i=e.resultIndex;i<e.results.length;i++){
+      if(e.results[i].isFinal)final+=e.results[i][0].transcript;
+      else itr+=e.results[i][0].transcript;
+    }
+    if(!interimEl&&(itr||final))interimEl=addMsg('You',itr||final);
+    else if(interimEl)interimEl.textContent=final||itr;
+    clearTimeout(silTimer);
+    if(final){silTimer=setTimeout(()=>{const said=final.trim();if(!said)return;interimEl=null;final='';processMessage(said);},900);}
+  };
+  r.onerror=e=>{if(e.error==='no-speech')return;errEl.textContent='Mic error: '+e.error;stopListening();};
+  r.onend=()=>{if(isListening&&!isSpeaking){try{r.start();}catch(e){}}};
+  return r;
+}
+function startListening(){recognition=setupRecog();if(!recognition)return;isListening=true;micBtn.classList.add('active');micIcon.className='ti ti-microphone-off';try{recognition.start();}catch(e){}}
+function stopListening(){isListening=false;if(recognition){try{recognition.stop();}catch(e){}recognition=null;}micBtn.classList.remove('active');micIcon.className='ti ti-microphone';setStatus('Ready — click mic to begin');resetAvatarMedia();}
+function toggleMic(){if(window.speechSynthesis)speechSynthesis.cancel();isSpeaking=false;resetAvatarMedia();if(isListening)stopListening();else startListening();}
+</script>
+</body>
+</html>
