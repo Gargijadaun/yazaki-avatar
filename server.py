@@ -1,7 +1,26 @@
 from flask import Flask, request, jsonify, make_response, send_from_directory
 import subprocess, base64, tempfile, os, uuid, sys, threading, traceback, shutil
+from datetime import datetime, timezone
 import numpy as np
 import cv2
+
+# ── MongoDB (optional — server runs fine without it) ──────────────────────────
+try:
+    from pymongo import MongoClient, ASCENDING, DESCENDING
+    _MONGO_URI = os.environ.get('MONGODB_URI', '')
+    if _MONGO_URI:
+        _mc = MongoClient(_MONGO_URI, serverSelectionTimeoutMS=5000)
+        _mc.admin.command('ping')
+        _mdb   = _mc['yazaki_avatar']
+        _chats = _mdb['chats']
+        _chats.create_index([('session_id', ASCENDING), ('timestamp', DESCENDING)])
+        print('[startup] MongoDB connected')
+    else:
+        _chats = None
+        print('[startup] MONGODB_URI not set — chat saving disabled')
+except Exception as _me:
+    print(f'[startup] MongoDB error: {_me}')
+    _chats = None
 
 BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
 WAV2LIP_DIR = os.path.join(BASE_DIR, 'Wav2Lip')
@@ -97,6 +116,35 @@ def index():
 @app.route('/config')
 def config():
     return jsonify({'groq_key': os.environ.get('GROQ_API_KEY', '')})
+
+@app.route('/save-chat', methods=['POST', 'OPTIONS'])
+def save_chat():
+    if request.method == 'OPTIONS': return make_response('OK', 200)
+    if not _chats:
+        return jsonify({'ok': False, 'error': 'MongoDB not configured'}), 503
+    data = request.get_json(force=True, silent=True) or {}
+    doc = {
+        'session_id': str(data.get('session_id', ''))[:64],
+        'timestamp':  datetime.now(timezone.utc),
+        'user':       str(data.get('user', ''))[:2000],
+        'ai':         str(data.get('ai',   ''))[:2000],
+        'lang':       str(data.get('lang', 'en-US'))[:16],
+    }
+    result = _chats.insert_one(doc)
+    return jsonify({'ok': True, 'id': str(result.inserted_id)})
+
+@app.route('/chat-history', methods=['GET'])
+def chat_history():
+    if not _chats:
+        return jsonify({'ok': False, 'chats': []})
+    session_id = request.args.get('session_id', '').strip()
+    limit      = min(int(request.args.get('limit', 50)), 200)
+    query      = {'session_id': session_id} if session_id else {}
+    docs = list(_chats.find(query, {'_id': 0}).sort('timestamp', ASCENDING).limit(limit))
+    for d in docs:
+        if isinstance(d.get('timestamp'), datetime):
+            d['timestamp'] = d['timestamp'].isoformat()
+    return jsonify({'ok': True, 'chats': docs})
 
 @app.route('/health')
 def health():

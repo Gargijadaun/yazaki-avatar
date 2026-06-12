@@ -10,6 +10,8 @@ services:
         sync: false          # set this manually in Render dashboard — never commit the value
       - key: PORT
         value: "5001"
+      - key: MONGODB_URI
+        sync: false          # set this in Render dashboard — MongoDB Atlas connection string
     disk:
       name: avatar-uploads
       mountPath: /app/uploads

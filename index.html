@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>ProtoPersona — AI Voice Avatar</title>
+<title>Yazaki — AI Voice Avatar</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css"/>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700&family=DM+Sans:ital,wght@0,300;0,400;0,500;1,400&display=swap');
@@ -255,7 +255,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;heigh
     <!-- bottom overlay -->
     <div class="portrait-overlay">
       <div>
-        <div class="avatar-name">AI Assistant <span>PROTOPERSONA · LIVE</span></div>
+        <div class="avatar-name">YazakiAvatar<span>YazakiAvatar · LIVE</span></div>
         <div id="status">Ready — click mic to begin</div>
       </div>
       <div class="controls-row">
@@ -467,13 +467,33 @@ let lipSyncRaf=null,lipSyncAudioCtx=null,lipSyncAudioSource=null,lipSyncAnalyser
 let history=[];
 let voiceOn=true;
 
-// Auto-detect server URL and load env-based config (Groq key etc.)
+// Persistent session ID — same tab = same session
+const SESSION_ID = sessionStorage.getItem('yz_sid') || (()=>{
+  const id = crypto.randomUUID();
+  sessionStorage.setItem('yz_sid', id);
+  return id;
+})();
+const SERVER_BASE = window.location.origin;
+
+// Auto-detect server URL, load Groq key, load chat history
 (async()=>{
-  const base=window.location.origin;          // works both locally and on Render
-  document.getElementById('wav2p-url').value=base+'/wav2p';
+  document.getElementById('wav2p-url').value = SERVER_BASE + '/wav2p';
   try{
-    const cfg=await fetch(base+'/config').then(r=>r.json());
-    if(cfg.groq_key) document.getElementById('groq-key').value=cfg.groq_key;
+    const cfg = await fetch(SERVER_BASE + '/config').then(r=>r.json());
+    if(cfg.groq_key) document.getElementById('groq-key').value = cfg.groq_key;
+  }catch(e){}
+  // Load previous chats for this session
+  try{
+    const h = await fetch(`${SERVER_BASE}/chat-history?session_id=${SESSION_ID}&limit=50`).then(r=>r.json());
+    if(h.ok && h.chats.length){
+      h.chats.forEach(c=>{
+        addMsg('You', c.user);
+        addMsg('Assistant', c.ai);
+        history.push({role:'user', content:c.user});
+        history.push({role:'assistant', content:c.ai});
+      });
+      addMsg('Assistant','— previous session restored —', true);
+    }
   }catch(e){}
 })();
 let avatarBase64='';
@@ -734,7 +754,17 @@ async function callGroq(userMsg){
     if(!res.ok){const e=await res.json();errEl.textContent='Groq error: '+(e.error?.message||res.status);history.pop();return null;}
     const d=await res.json();
     const reply=d.choices[0].message.content.trim();
-    history.push({role:'assistant',content:reply});return reply;
+    history.push({role:'assistant',content:reply});
+    // Save to MongoDB (fire-and-forget — don't block the UI)
+    fetch(SERVER_BASE+'/save-chat',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        session_id:SESSION_ID, user:userMsg, ai:reply,
+        lang:document.getElementById('lang-sel').value
+      })
+    }).catch(()=>{});
+    return reply;
   }catch(e){errEl.textContent='Network error: '+e.message;history.pop();return null;}
 }
 async function processMessage(said){
